@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Environment
+.env
+.env.local
+.env.production
+*.env
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+*.log
+
+# Data
+data/
+*.db
+*.sqlite
+
+# Temp
+temp/
+/app/temp/
+
+# Logs
+logs/
+*.log
+
+# Test
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# n8n
+n8n_data/
+
+# Assets (user-provided)
+assets/logo.png
+assets/default_thumbnail.webp

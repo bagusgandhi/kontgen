@@ -1,0 +1,62 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: autoblog_api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override paths agar sesuai dengan path di dalam container
+      - DEFAULT_THUMBNAIL_PATH=/app/assets/default_thumbnail.webp
+      - COMPANY_LOGO_PATH=/app/assets/logo.png
+      - TEMP_DIR=/app/temp
+      # Redis URL menggunakan nama service Docker, bukan localhost
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./data:/app/data
+      - ./assets:/app/assets
+      - ./logs:/app/logs
+      - ./temp:/app/temp
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - autoblog_net
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: autoblog_n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_USER:-admin}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD:-admin123}
+      - WEBHOOK_URL=${N8N_WEBHOOK_URL:-http://localhost:5678}
+      - N8N_HOST=0.0.0.0
+      - N8N_PORT=5678
+      - TZ=Asia/Jakarta
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+      - ./n8n_workflows:/home/node/.n8n/workflows
+    restart: unless-stopped
+    networks:
+      - autoblog_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: autoblog_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    networks:
+      - autoblog_net
+
+networks:
+  autoblog_net:
+    driver: bridge
