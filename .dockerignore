@@ -1,0 +1,47 @@
+# n8n runtime data — tidak perlu masuk build context
+n8n_data/
+
+# Data & logs — dibuat saat runtime, bukan saat build
+data/
+logs/
+temp/
+
+# Env files — tidak boleh masuk image
+.env
+.env.local
+.env.production
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Test & coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docs
+README.md
+*.md
+
+# Assets besar yang tidak dibutuhkan saat build
+assets/*.webp
+assets/*.jpg
+assets/*.jpeg
