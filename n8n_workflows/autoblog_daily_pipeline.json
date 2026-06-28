@@ -21,18 +21,12 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://api:8000/api/v1/pipeline/run",
+        "url": "http://api:8000/api/v1/pipeline/run-async",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "force",
-              "value": "={{ false }}"
-            }
-          ]
-        },
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ force: false }) }}",
         "options": {
-          "timeout": 300000,
+          "timeout": 15000,
           "response": {
             "response": {
               "neverError": true
@@ -40,132 +34,171 @@
           }
         }
       },
-      "id": "run-pipeline",
-      "name": "Trigger Pipeline API",
+      "id": "trigger-async",
+      "name": "Trigger Pipeline (Async)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [460, 300]
+      "position": [460, 300],
+      "notes": "Returns immediately with run_id. Pipeline runs in background."
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "initial-wait",
+      "name": "Wait 10s (initial)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "notes": "Give pipeline time to start before first poll"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://api:8000/api/v1/pipeline/status/{{ $('Trigger Pipeline (Async)').item.json.run_id }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "poll-status",
+      "name": "Poll Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
     },
     {
       "parameters": {
         "conditions": {
           "options": {
-            "caseSensitive": true,
+            "caseSensitive": false,
             "leftValue": "",
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "conditions": [
             {
-              "id": "success-check",
-              "leftValue": "={{ $json.success }}",
-              "rightValue": true,
+              "id": "still-running",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "running",
               "operator": {
-                "type": "boolean",
-                "operation": "equal"
+                "type": "string",
+                "operation": "equals"
               }
             }
           ],
           "combinator": "and"
         }
       },
-      "id": "check-success",
-      "name": "Check Success",
+      "id": "check-still-running",
+      "name": "Still Running?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [680, 300]
+      "position": [1120, 300],
+      "notes": "true = still running → wait & retry | false = done"
     },
     {
       "parameters": {
-        "content": "## ✅ AutoBlog Success\n\n**Artikel:** {{ $json.article_title }}\n**Keyword:** {{ $json.keyword }}\n**Words:** {{ $json.word_count }}\n**Duration:** {{ $json.processing_time_seconds }}s\n**Draft:** {{ $json.wp_draft_url }}",
-        "options": {}
+        "amount": 15,
+        "unit": "seconds"
       },
-      "id": "success-note",
-      "name": "Success",
-      "type": "n8n-nodes-base.stickyNote",
+      "id": "poll-wait",
+      "name": "Wait 15s (poll interval)",
+      "type": "n8n-nodes-base.wait",
       "typeVersion": 1,
-      "position": [900, 200]
+      "position": [1340, 200],
+      "notes": "Poll every 15 seconds. Max ~20 polls = 5 minutes total."
     },
     {
       "parameters": {
-        "content": "## ❌ AutoBlog Failed\n\n**Keyword:** {{ $json.keyword }}\n**Error:** {{ $json.error_message }}\n**Duration:** {{ $json.processing_time_seconds }}s",
-        "options": {}
-      },
-      "id": "failure-note",
-      "name": "Failure",
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
-      "position": [900, 420]
-    },
-    {
-      "parameters": {
-        "method": "GET",
-        "url": "http://api:8000/health/",
-        "options": {
-          "timeout": 10000
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "check-success",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
         }
       },
-      "id": "health-check",
-      "name": "Health Check",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.1,
-      "position": [240, 500],
-      "notes": "Optional: Pre-check API health before running pipeline"
+      "id": "check-result",
+      "name": "Success or Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "content": "## ✅ Pipeline Completed\nStatus: {{ $json.status }}\nKeyword: {{ $json.keyword }}\nArticle: {{ $json.article_title }}\nPost ID: {{ $json.wp_post_id }}\nTime: {{ $json.processing_time_seconds }}s",
+        "height": 160,
+        "width": 280
+      },
+      "id": "success-note",
+      "name": "Success ✅",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1560, 340]
+    },
+    {
+      "parameters": {
+        "content": "## ❌ Pipeline Failed\nStatus: {{ $json.status }}\nError: {{ $json.error_message }}",
+        "height": 120,
+        "width": 280,
+        "color": 3
+      },
+      "id": "fail-note",
+      "name": "Failed ❌",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1560, 480]
     }
   ],
   "connections": {
     "Daily 6 AM WIB": {
+      "main": [[{ "node": "Trigger Pipeline (Async)", "type": "main", "index": 0 }]]
+    },
+    "Trigger Pipeline (Async)": {
+      "main": [[{ "node": "Wait 10s (initial)", "type": "main", "index": 0 }]]
+    },
+    "Wait 10s (initial)": {
+      "main": [[{ "node": "Poll Status", "type": "main", "index": 0 }]]
+    },
+    "Poll Status": {
+      "main": [[{ "node": "Still Running?", "type": "main", "index": 0 }]]
+    },
+    "Still Running?": {
       "main": [
-        [
-          {
-            "node": "Trigger Pipeline API",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Wait 15s (poll interval)", "type": "main", "index": 0 }],
+        [{ "node": "Success or Failed?", "type": "main", "index": 0 }]
       ]
     },
-    "Trigger Pipeline API": {
-      "main": [
-        [
-          {
-            "node": "Check Success",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Wait 15s (poll interval)": {
+      "main": [[{ "node": "Poll Status", "type": "main", "index": 0 }]]
     },
-    "Check Success": {
+    "Success or Failed?": {
       "main": [
-        [
-          {
-            "node": "Success",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Failure",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Success ✅", "type": "main", "index": 0 }],
+        [{ "node": "Failed ❌", "type": "main", "index": 0 }]
       ]
     }
   },
   "active": false,
   "settings": {
     "executionOrder": "v1",
-    "saveManualExecutions": true,
-    "callerPolicy": "workflowsFromSameOwner",
-    "errorWorkflow": ""
-  },
-  "versionId": "1",
-  "meta": {
-    "templateCredsSetupCompleted": true,
-    "instanceId": "autoblog-generator"
+    "saveManualExecutions": true
   },
   "id": "autoblog-daily-pipeline",
-  "tags": ["autoblog", "wordpress", "seo"]
+  "tags": ["autoblog", "wordpress", "seo", "async"]
 }

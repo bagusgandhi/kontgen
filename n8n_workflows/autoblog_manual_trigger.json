@@ -6,7 +6,7 @@
         "httpMethod": "POST",
         "path": "trigger-blog",
         "authentication": "none",
-        "responseMode": "onReceived",
+        "responseMode": "lastNode",
         "options": {}
       },
       "id": "webhook-trigger",
@@ -19,29 +19,92 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "http://api:8000/api/v1/pipeline/run",
+        "url": "http://api:8000/api/v1/pipeline/run-async",
         "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "keyword",
-              "value": "={{ $json.body.keyword }}"
-            },
-            {
-              "name": "force",
-              "value": "={{ $json.body.force || false }}"
-            }
-          ]
-        },
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ keyword: $json.body.keyword || null, force: $json.body.force || false }) }}",
         "options": {
-          "timeout": 300000
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
         }
       },
-      "id": "run-pipeline",
-      "name": "Run Pipeline",
+      "id": "trigger-async",
+      "name": "Trigger Pipeline (Async)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
       "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds"
+      },
+      "id": "initial-wait",
+      "name": "Wait 10s (initial)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://api:8000/api/v1/pipeline/status/{{ $('Trigger Pipeline (Async)').item.json.run_id }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "poll-status",
+      "name": "Poll Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "still-running",
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "running",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-still-running",
+      "name": "Still Running?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "id": "poll-wait",
+      "name": "Wait 15s (poll interval)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1340, 200]
     },
     {
       "parameters": {
@@ -50,40 +113,40 @@
         "options": {}
       },
       "id": "respond",
-      "name": "Respond",
+      "name": "Respond to Webhook",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1,
-      "position": [680, 300]
+      "position": [1340, 400]
     }
   ],
   "connections": {
     "Webhook Trigger": {
+      "main": [[{ "node": "Trigger Pipeline (Async)", "type": "main", "index": 0 }]]
+    },
+    "Trigger Pipeline (Async)": {
+      "main": [[{ "node": "Wait 10s (initial)", "type": "main", "index": 0 }]]
+    },
+    "Wait 10s (initial)": {
+      "main": [[{ "node": "Poll Status", "type": "main", "index": 0 }]]
+    },
+    "Poll Status": {
+      "main": [[{ "node": "Still Running?", "type": "main", "index": 0 }]]
+    },
+    "Still Running?": {
       "main": [
-        [
-          {
-            "node": "Run Pipeline",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Wait 15s (poll interval)", "type": "main", "index": 0 }],
+        [{ "node": "Respond to Webhook", "type": "main", "index": 0 }]
       ]
     },
-    "Run Pipeline": {
-      "main": [
-        [
-          {
-            "node": "Respond",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Wait 15s (poll interval)": {
+      "main": [[{ "node": "Poll Status", "type": "main", "index": 0 }]]
     }
   },
   "active": false,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "saveManualExecutions": true
   },
   "id": "autoblog-manual-trigger",
-  "tags": ["autoblog", "manual"]
+  "tags": ["autoblog", "manual", "async"]
 }

@@ -48,6 +48,8 @@ class ArticleRecord(Base):
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     seo_score: Mapped[float] = mapped_column(Float, default=0.0)
     thumbnail_source: Mapped[str] = mapped_column(String(100), default="")
+    # Store the image URL used so we can avoid reusing it
+    thumbnail_url: Mapped[str] = mapped_column(String(2000), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -85,6 +87,23 @@ class PipelineRunRecord(Base):
     processing_time_seconds: Mapped[float] = mapped_column(Float, default=0.0)
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+
+class UsedImageRecord(Base):
+    """
+    Tracks every image URL that has been used as a thumbnail.
+    Used by ImageProviderFactory to skip already-used images
+    and ensure variety across articles with similar keywords.
+    """
+    __tablename__ = "used_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Normalized URL for dedup (strip query params)
+    url_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    url: Mapped[str] = mapped_column(String(2000))
+    source: Mapped[str] = mapped_column(String(50), default="")      # unsplash/pexels/etc
+    keyword: Mapped[str] = mapped_column(String(255), default="")    # keyword used to find it
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 async def init_db() -> None:

@@ -63,23 +63,38 @@ async def run_pipeline_async(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Trigger pipeline as background task and return immediately.
-    Use /status/{run_id} to check progress.
-    
-    Useful for long-running generations via n8n webhook response.
+    Trigger pipeline as background task and return immediately with run_id.
+    Poll /status/{run_id} to track progress.
+
+    Flow:
+      1. POST /run-async  → returns run_id instantly (< 1s)
+      2. GET  /status/{run_id} → poll every 15s until status != "running"
     """
     import uuid
+    from datetime import datetime
+    from services.database import PipelineRunRecord, AsyncSessionLocal
 
     run_id = str(uuid.uuid4())
 
+    # Pre-create the run record so /status can find it immediately
+    run_record = PipelineRunRecord(
+        run_id=run_id,
+        keyword=request.keyword or "",
+        status="running",
+        progress_step="queued",
+        started_at=datetime.utcnow(),
+    )
+    db.add(run_record)
+    await db.commit()
+
     async def _run():
-        from services.database import AsyncSessionLocal
         async with AsyncSessionLocal() as session:
             orchestrator = PipelineOrchestrator(db_session=session)
-            await orchestrator.run(request)
+            # Pass run_id so orchestrator reuses the existing record
+            await orchestrator.run(request, run_id=run_id)
 
     background_tasks.add_task(_run)
-    logger.info("Pipeline queued", run_id=run_id)
+    logger.info("Pipeline queued", run_id=run_id, keyword=request.keyword)
 
     return TriggerResponse(
         message="Pipeline queued for execution",

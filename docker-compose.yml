@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   api:
     build:
@@ -42,6 +40,7 @@ services:
       - N8N_HOST=0.0.0.0
       - N8N_PORT=5678
       - TZ=Asia/Jakarta
+      - N8N_SECURE_COOKIE=false
     volumes:
       - ./n8n_data:/home/node/.n8n
       - ./n8n_workflows:/home/node/.n8n/workflows

@@ -11,8 +11,8 @@ from core.models import ImageResult
 class BaseImageProvider(ABC):
     """
     Abstract base class for all image providers.
-    Follows Interface Segregation Principle - each provider implements
-    only the search method.
+    Each provider implements search() which accepts an optional
+    set of already-used URLs to exclude from results.
     """
 
     @property
@@ -23,17 +23,21 @@ class BaseImageProvider(ABC):
 
     @abstractmethod
     async def search(
-        self, keywords: list[str], orientation: str = "landscape"
+        self,
+        keywords: list[str],
+        orientation: str = "landscape",
+        exclude_urls: Optional[set[str]] = None,
     ) -> Optional[ImageResult]:
         """
-        Search for an image matching the keywords.
-        
+        Search for a fresh image matching the keywords.
+
         Args:
-            keywords: List of search terms (English preferred)
-            orientation: 'landscape', 'portrait', or 'square'
-            
+            keywords: List of search terms (English preferred).
+            orientation: 'landscape', 'portrait', or 'square'.
+            exclude_urls: Set of image URLs already used — skip these.
+
         Returns:
-            ImageResult if found, None otherwise.
+            ImageResult if a fresh image is found, None otherwise.
         """
         ...
 
@@ -41,5 +45,31 @@ class BaseImageProvider(ABC):
         """Pick the most descriptive keyword for search."""
         if not keywords:
             return "home appliance electronics"
-        # Prefer longer, more descriptive keywords
         return max(keywords, key=len)
+
+    def _build_query_list(self, keywords: list[str]) -> list[str]:
+        """
+        Build an ordered list of queries to try.
+        Tries longer/more specific keywords first, then shorter fallbacks.
+        This gives more variety when specific queries run out of fresh results.
+
+        Example:
+          Input:  ["modern air conditioner unit", "air conditioner", "AC"]
+          Output: ["modern air conditioner unit", "air conditioner", "AC",
+                   "home appliance electronics"]  ← generic fallback last
+        """
+        if not keywords:
+            return ["home appliance electronics"]
+
+        # Sort by length descending (more specific first), deduplicate
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for kw in sorted(keywords, key=len, reverse=True):
+            kw = kw.strip()
+            if kw and kw.lower() not in seen:
+                seen.add(kw.lower())
+                ordered.append(kw)
+
+        # Always add a generic fallback so we have something to try
+        ordered.append("home appliance electronics")
+        return ordered

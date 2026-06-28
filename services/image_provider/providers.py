@@ -7,9 +7,12 @@ Priority order (configured via IMAGE_PROVIDER env):
 2. Pexels
 3. Pixabay
 4. Wikimedia Commons
+
+Each provider accepts `exclude_urls` — a set of already-used image URLs.
+Results that match any excluded URL are skipped, ensuring variety.
 """
 
-import urllib.parse
+import random
 from typing import Optional
 import structlog
 
@@ -19,6 +22,9 @@ from services.utils.http_client import AsyncHTTPClient
 from .base import BaseImageProvider
 
 logger = structlog.get_logger(__name__)
+
+# Fetch more results per request so we have candidates to filter from
+RESULTS_PER_PAGE = 15
 
 
 class UnsplashProvider(BaseImageProvider):
@@ -35,42 +41,69 @@ class UnsplashProvider(BaseImageProvider):
         return "unsplash"
 
     async def search(
-        self, keywords: list[str], orientation: str = "landscape"
+        self,
+        keywords: list[str],
+        orientation: str = "landscape",
+        exclude_urls: Optional[set[str]] = None,
     ) -> Optional[ImageResult]:
         if not settings.UNSPLASH_ACCESS_KEY:
             logger.warning("Unsplash API key not configured")
             return None
 
-        query = self._pick_best_keyword(keywords)
-        logger.debug("Searching Unsplash", query=query)
+        exclude_urls = exclude_urls or set()
+
+        # Try each keyword until we find a fresh image
+        queries = self._build_query_list(keywords)
+        for query in queries:
+            result = await self._search_query(query, orientation, exclude_urls)
+            if result:
+                return result
+
+        return None
+
+    async def _search_query(
+        self, query: str, orientation: str, exclude_urls: set[str]
+    ) -> Optional[ImageResult]:
+        logger.debug("Searching Unsplash", query=query, excluded=len(exclude_urls))
 
         try:
             async with AsyncHTTPClient(
                 base_url=self.BASE_URL,
                 headers={"Authorization": f"Client-ID {settings.UNSPLASH_ACCESS_KEY}"},
             ) as client:
-                response = await client.get(
-                    "/search/photos",
-                    params={
-                        "query": query,
-                        "orientation": orientation,
-                        "per_page": 5,
-                        "order_by": "relevant",
-                        "content_filter": "high",
-                    },
-                )
-                data = response.json()
-                results = data.get("results", [])
+                # Fetch page 1 and page 2 for more variety
+                candidates = []
+                for page in [1, 2]:
+                    response = await client.get(
+                        "/search/photos",
+                        params={
+                            "query": query,
+                            "orientation": orientation,
+                            "per_page": RESULTS_PER_PAGE,
+                            "page": page,
+                            "order_by": "relevant",
+                            "content_filter": "high",
+                        },
+                    )
+                    results = response.json().get("results", [])
+                    candidates.extend(results)
+                    if not results:
+                        break
 
-                if not results:
-                    # Try with first keyword
-                    if len(keywords) > 1:
-                        return await self._retry_search(keywords[0])
+                # Filter out already-used URLs
+                fresh = [
+                    p for p in candidates
+                    if p["urls"]["regular"] not in exclude_urls
+                ]
+
+                if not fresh:
+                    logger.debug("All Unsplash results already used", query=query)
                     return None
 
-                photo = results[0]
+                # Pick randomly from fresh candidates for variety
+                photo = random.choice(fresh)
                 return ImageResult(
-                    url=photo["urls"]["regular"],  # 1080px wide
+                    url=photo["urls"]["regular"],
                     photographer=photo["user"]["name"],
                     photographer_url=photo["user"]["links"]["html"],
                     source="unsplash",
@@ -81,32 +114,6 @@ class UnsplashProvider(BaseImageProvider):
         except Exception as e:
             logger.error("Unsplash search failed", query=query, error=str(e))
             return None
-
-    async def _retry_search(self, query: str) -> Optional[ImageResult]:
-        """Retry with simplified query."""
-        try:
-            async with AsyncHTTPClient(
-                base_url=self.BASE_URL,
-                headers={"Authorization": f"Client-ID {settings.UNSPLASH_ACCESS_KEY}"},
-            ) as client:
-                response = await client.get(
-                    "/search/photos",
-                    params={"query": query, "per_page": 3},
-                )
-                results = response.json().get("results", [])
-                if results:
-                    photo = results[0]
-                    return ImageResult(
-                        url=photo["urls"]["regular"],
-                        photographer=photo["user"]["name"],
-                        photographer_url=photo["user"]["links"]["html"],
-                        source="unsplash",
-                        license="Unsplash License",
-                        alt_text=query,
-                    )
-        except Exception:
-            pass
-        return None
 
 
 class PexelsProvider(BaseImageProvider):
@@ -123,38 +130,64 @@ class PexelsProvider(BaseImageProvider):
         return "pexels"
 
     async def search(
-        self, keywords: list[str], orientation: str = "landscape"
+        self,
+        keywords: list[str],
+        orientation: str = "landscape",
+        exclude_urls: Optional[set[str]] = None,
     ) -> Optional[ImageResult]:
         if not settings.PEXELS_API_KEY:
             logger.warning("Pexels API key not configured")
             return None
 
-        query = self._pick_best_keyword(keywords)
-        logger.debug("Searching Pexels", query=query)
+        exclude_urls = exclude_urls or set()
+        queries = self._build_query_list(keywords)
+
+        for query in queries:
+            result = await self._search_query(query, orientation, exclude_urls)
+            if result:
+                return result
+
+        return None
+
+    async def _search_query(
+        self, query: str, orientation: str, exclude_urls: set[str]
+    ) -> Optional[ImageResult]:
+        logger.debug("Searching Pexels", query=query, excluded=len(exclude_urls))
 
         try:
             async with AsyncHTTPClient(
                 base_url=self.BASE_URL,
                 headers={"Authorization": settings.PEXELS_API_KEY},
             ) as client:
-                response = await client.get(
-                    "/search",
-                    params={
-                        "query": query,
-                        "orientation": orientation,
-                        "per_page": 5,
-                        "size": "large",
-                    },
-                )
-                data = response.json()
-                photos = data.get("photos", [])
+                candidates = []
+                for page in [1, 2]:
+                    response = await client.get(
+                        "/search",
+                        params={
+                            "query": query,
+                            "orientation": orientation,
+                            "per_page": RESULTS_PER_PAGE,
+                            "page": page,
+                            "size": "large",
+                        },
+                    )
+                    photos = response.json().get("photos", [])
+                    candidates.extend(photos)
+                    if not photos:
+                        break
 
-                if not photos:
+                fresh = [
+                    p for p in candidates
+                    if p["src"]["large2x"] not in exclude_urls
+                ]
+
+                if not fresh:
+                    logger.debug("All Pexels results already used", query=query)
                     return None
 
-                photo = photos[0]
+                photo = random.choice(fresh)
                 return ImageResult(
-                    url=photo["src"]["large2x"],  # 940x627
+                    url=photo["src"]["large2x"],
                     photographer=photo["photographer"],
                     photographer_url=photo["photographer_url"],
                     source="pexels",
@@ -181,37 +214,63 @@ class PixabayProvider(BaseImageProvider):
         return "pixabay"
 
     async def search(
-        self, keywords: list[str], orientation: str = "landscape"
+        self,
+        keywords: list[str],
+        orientation: str = "landscape",
+        exclude_urls: Optional[set[str]] = None,
     ) -> Optional[ImageResult]:
         if not settings.PIXABAY_API_KEY:
             logger.warning("Pixabay API key not configured")
             return None
 
-        query = self._pick_best_keyword(keywords)
-        logger.debug("Searching Pixabay", query=query)
+        exclude_urls = exclude_urls or set()
+        queries = self._build_query_list(keywords)
+
+        for query in queries:
+            result = await self._search_query(query, orientation, exclude_urls)
+            if result:
+                return result
+
+        return None
+
+    async def _search_query(
+        self, query: str, orientation: str, exclude_urls: set[str]
+    ) -> Optional[ImageResult]:
+        logger.debug("Searching Pixabay", query=query, excluded=len(exclude_urls))
 
         try:
             async with AsyncHTTPClient(base_url=self.BASE_URL) as client:
-                response = await client.get(
-                    "/",
-                    params={
-                        "key": settings.PIXABAY_API_KEY,
-                        "q": query,
-                        "orientation": orientation,
-                        "image_type": "photo",
-                        "safesearch": "true",
-                        "per_page": 5,
-                        "min_width": 1200,
-                        "min_height": 630,
-                    },
-                )
-                data = response.json()
-                hits = data.get("hits", [])
+                candidates = []
+                for page in [1, 2]:
+                    response = await client.get(
+                        "/",
+                        params={
+                            "key": settings.PIXABAY_API_KEY,
+                            "q": query,
+                            "orientation": orientation,
+                            "image_type": "photo",
+                            "safesearch": "true",
+                            "per_page": RESULTS_PER_PAGE,
+                            "page": page,
+                            "min_width": 1200,
+                            "min_height": 630,
+                        },
+                    )
+                    hits = response.json().get("hits", [])
+                    candidates.extend(hits)
+                    if not hits:
+                        break
 
-                if not hits:
+                fresh = [
+                    p for p in candidates
+                    if p["largeImageURL"] not in exclude_urls
+                ]
+
+                if not fresh:
+                    logger.debug("All Pixabay results already used", query=query)
                     return None
 
-                photo = hits[0]
+                photo = random.choice(fresh)
                 return ImageResult(
                     url=photo["largeImageURL"],
                     photographer=photo.get("user", ""),
@@ -239,65 +298,63 @@ class WikimediaProvider(BaseImageProvider):
         return "wikimedia"
 
     async def search(
-        self, keywords: list[str], orientation: str = "landscape"
+        self,
+        keywords: list[str],
+        orientation: str = "landscape",
+        exclude_urls: Optional[set[str]] = None,
     ) -> Optional[ImageResult]:
+        exclude_urls = exclude_urls or set()
         query = self._pick_best_keyword(keywords)
         logger.debug("Searching Wikimedia Commons", query=query)
 
         try:
             async with AsyncHTTPClient() as client:
-                # Search for images
                 response = await client.get(
                     self.BASE_URL,
                     params={
                         "action": "query",
                         "format": "json",
                         "list": "search",
-                        "srnamespace": "6",  # File namespace
+                        "srnamespace": "6",
                         "srsearch": f"{query} filetype:jpeg",
-                        "srlimit": 5,
+                        "srlimit": RESULTS_PER_PAGE,
                         "srprop": "snippet",
                     },
                 )
-                data = response.json()
-                results = data.get("query", {}).get("search", [])
-
+                results = response.json().get("query", {}).get("search", [])
                 if not results:
                     return None
 
-                # Get image info for first result
-                title = results[0]["title"]
-                info_response = await client.get(
-                    self.BASE_URL,
-                    params={
-                        "action": "query",
-                        "format": "json",
-                        "titles": title,
-                        "prop": "imageinfo",
-                        "iiprop": "url|extmetadata",
-                        "iiurlwidth": 1200,
-                    },
-                )
-                info_data = info_response.json()
-                pages = info_data.get("query", {}).get("pages", {})
+                # Shuffle for variety
+                random.shuffle(results)
 
-                for page in pages.values():
-                    imageinfo = page.get("imageinfo", [{}])[0]
-                    url = imageinfo.get("thumburl") or imageinfo.get("url", "")
-                    if url:
-                        meta = imageinfo.get("extmetadata", {})
-                        artist = meta.get("Artist", {}).get("value", "")
-                        license_name = meta.get("LicenseShortName", {}).get(
-                            "value", "CC License"
-                        )
-                        return ImageResult(
-                            url=url,
-                            photographer=artist,
-                            photographer_url="https://commons.wikimedia.org",
-                            source="wikimedia",
-                            license=license_name,
-                            alt_text=query,
-                        )
+                for item in results:
+                    title = item["title"]
+                    info_response = await client.get(
+                        self.BASE_URL,
+                        params={
+                            "action": "query",
+                            "format": "json",
+                            "titles": title,
+                            "prop": "imageinfo",
+                            "iiprop": "url|extmetadata",
+                            "iiurlwidth": 1200,
+                        },
+                    )
+                    pages = info_response.json().get("query", {}).get("pages", {})
+                    for page in pages.values():
+                        imageinfo = page.get("imageinfo", [{}])[0]
+                        url = imageinfo.get("thumburl") or imageinfo.get("url", "")
+                        if url and url not in exclude_urls:
+                            meta = imageinfo.get("extmetadata", {})
+                            return ImageResult(
+                                url=url,
+                                photographer=meta.get("Artist", {}).get("value", ""),
+                                photographer_url="https://commons.wikimedia.org",
+                                source="wikimedia",
+                                license=meta.get("LicenseShortName", {}).get("value", "CC License"),
+                                alt_text=query,
+                            )
 
         except Exception as e:
             logger.error("Wikimedia search failed", query=query, error=str(e))

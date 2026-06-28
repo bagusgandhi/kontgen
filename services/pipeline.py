@@ -76,17 +76,22 @@ class PipelineOrchestrator:
         self._keyword_scorer = KeywordScorer(self._openai)
         self._content_generator = ContentGenerator(self._openai)
         self._seo_validator = SEOValidator()
-        self._image_factory = ImageProviderFactory()
+        self._image_factory = ImageProviderFactory(db_session=self._db)  # pass DB for dedup
         self._image_processor = ImageProcessor()
         self._wp_client = WordPressClient()
         self._notifier = TelegramNotifier()
 
-    async def run(self, request: PipelineRequest) -> PipelineResult:
+    async def run(self, request: PipelineRequest, run_id: Optional[str] = None) -> PipelineResult:
         """
         Execute the complete blog generation pipeline.
         Handles errors gracefully and always sends notification.
+
+        Args:
+            request: Pipeline request parameters.
+            run_id: If provided, reuse existing PipelineRunRecord (created by /run-async).
+                    If None, create a new record (used by /run synchronous endpoint).
         """
-        run_id = str(uuid.uuid4())
+        run_id = run_id or str(uuid.uuid4())
         start_time = time.time()
         result = PipelineResult(
             success=False,
@@ -94,15 +99,24 @@ class PipelineOrchestrator:
             timestamp=datetime.utcnow(),
         )
 
-        # Create pipeline run record
-        run_record = PipelineRunRecord(
-            run_id=run_id,
-            keyword=request.keyword or "",
-            status="running",
-            progress_step="started",
-        )
-        self._db.add(run_record)
-        await self._db.commit()
+        # Reuse existing record (async mode) or create new one (sync mode)
+        from sqlalchemy import select as sa_select
+        stmt = sa_select(PipelineRunRecord).where(PipelineRunRecord.run_id == run_id)
+        existing = await self._db.execute(stmt)
+        run_record = existing.scalar_one_or_none()
+
+        if run_record is None:
+            run_record = PipelineRunRecord(
+                run_id=run_id,
+                keyword=request.keyword or "",
+                status="running",
+                progress_step="started",
+            )
+            self._db.add(run_record)
+            await self._db.commit()
+        else:
+            run_record.progress_step = "started"
+            await self._db.commit()
 
         try:
             logger.info(
@@ -202,7 +216,10 @@ class PipelineOrchestrator:
             run_record.wp_post_id = wp_post.wp_post_id
 
             # ─── Step 11: Save to local database ──────────────────────────
-            await self._save_article_record(article, wp_post, processed_image.source)
+            await self._save_article_record(
+                article, wp_post, processed_image.source,
+                thumbnail_url=image_result.url if image_result else "",
+            )
 
             # ─── Success ───────────────────────────────────────────────────
             result.success = True
@@ -336,6 +353,7 @@ class PipelineOrchestrator:
         article: ArticleContent,
         wp_post,
         thumbnail_source: str,
+        thumbnail_url: str = "",
     ) -> None:
         """Save article record to local database."""
         record = ArticleRecord(
@@ -347,6 +365,7 @@ class PipelineOrchestrator:
             status="draft",
             word_count=article.word_count,
             thumbnail_source=thumbnail_source,
+            thumbnail_url=thumbnail_url,
         )
         self._db.add(record)
 
