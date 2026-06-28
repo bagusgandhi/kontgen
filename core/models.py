@@ -119,7 +119,8 @@ class WordPressPost(BaseModel):
 class PipelineRequest(BaseModel):
     """Manual trigger request for the pipeline."""
     keyword: Optional[str] = None  # If None, auto-research trending keywords
-    force: bool = False  # Skip duplicate check
+    force: bool = False             # Skip duplicate check
+    mode: str = "balanced"          # "balanced" | "golden" — keyword research strategy
 
 
 class PipelineResult(BaseModel):

@@ -16,6 +16,7 @@ router = APIRouter()
 
 class ResearchRequest(BaseModel):
     limit: int = 20
+    mode: str = "balanced"  # "balanced" | "golden"
 
 
 class ScoreRequest(BaseModel):
@@ -27,13 +28,41 @@ async def research_keywords(
     request: ResearchRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Research trending keywords from all configured sources."""
+    """
+    Research trending keywords dari semua source termasuk GPT.
+
+    Mode:
+    - **balanced**: distribusi merata antar niche (default)
+    - **golden**: fokus keyword low-competition, long-tail, question-based
+    """
+    from sqlalchemy import select as sa_sel
+    from services.database import ArticleRecord
+    from core.openai_client import create_openai_client
+
+    # Load existing agar GPT tidak duplikat
+    stmt = sa_sel(ArticleRecord.keyword)
+    result = await db.execute(stmt)
+    existing = list(result.scalars().all())
+
     from services.trend_research.researcher import TrendResearcher
-    researcher = TrendResearcher()
-    keywords = await researcher.research(limit=request.limit)
+    researcher = TrendResearcher(openai_client=create_openai_client())
+    keywords = await researcher.research(
+        limit=request.limit,
+        mode=request.mode,
+        existing_keywords=existing,
+    )
     return {
+        "mode": request.mode,
         "count": len(keywords),
-        "keywords": [{"keyword": k.keyword, "source": k.source} for k in keywords],
+        "keywords": [
+            {
+                "keyword": k.keyword,
+                "source": k.source,
+                "raw_score": k.raw_score,
+                "rationale": k.related_keywords[0] if k.related_keywords else "",
+            }
+            for k in keywords
+        ],
     }
 
 

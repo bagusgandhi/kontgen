@@ -72,7 +72,7 @@ class PipelineOrchestrator:
         self._openai = openai_client or create_openai_client()
 
         # Initialize all services
-        self._trend_researcher = TrendResearcher()
+        self._trend_researcher = TrendResearcher(openai_client=self._openai)
         self._keyword_scorer = KeywordScorer(self._openai)
         self._content_generator = ContentGenerator(self._openai)
         self._seo_validator = SEOValidator()
@@ -272,8 +272,19 @@ class PipelineOrchestrator:
         if request.keyword:
             return request.keyword
 
-        # Auto-research trending keywords
-        trending = await self._trend_researcher.research(limit=20)
+        # Load existing keywords dari DB agar GPT tidak suggest duplikat
+        from sqlalchemy import select as sa_select2
+        stmt = sa_select2(ArticleRecord.keyword)
+        result = await self._db.execute(stmt)
+        existing_keywords = list(result.scalars().all())
+
+        # Auto-research dengan mode dari request
+        mode = request.mode if request.mode in ("balanced", "golden") else "balanced"
+        trending = await self._trend_researcher.research(
+            limit=20,
+            mode=mode,
+            existing_keywords=existing_keywords,
+        )
 
         if not trending:
             raise KeywordResearchError("No trending keywords found")
@@ -282,7 +293,7 @@ class PipelineOrchestrator:
         scored = await self._keyword_scorer.score_batch(trending)
 
         if not scored:
-            return trending[0].keyword  # Fallback to first found
+            return trending[0].keyword
 
         # Find highest scored keyword not already published
         for kw_score in scored:
@@ -290,7 +301,6 @@ class PipelineOrchestrator:
                 await self._save_keyword_record(kw_score)
                 return kw_score.keyword
 
-        # All top keywords are duplicates, use highest score anyway
         return scored[0].keyword
 
     async def _is_duplicate(self, keyword: str) -> bool:
