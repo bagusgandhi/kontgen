@@ -40,6 +40,10 @@ class ArticleOutline(BaseModel):
     faq_questions: list[str]
     image_search_keywords: list[str]
 
+    # Hints dari outline generation — dipakai saat article generation
+    # Tidak perlu disimpan ke DB, hanya dipakai dalam satu pipeline run
+    model_config = {"extra": "allow"}
+
 
 class FAQItem(BaseModel):
     question: str
